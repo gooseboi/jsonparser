@@ -2,7 +2,7 @@ use core::iter::Peekable;
 use core::str::Chars;
 
 #[derive(Debug, PartialEq, Eq)]
-enum TokenKind {
+pub(crate) enum TokenKind {
     OpenBracket,
     ClosedBracket,
 
@@ -19,17 +19,18 @@ enum TokenKind {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct Loc {
-    col: usize,
-    line: usize,
+pub(crate) struct Loc {
+    pub(crate) col: usize,
+    pub(crate) line: usize,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Token {
-    kind: TokenKind,
-    loc: Loc,
+    pub(crate) kind: TokenKind,
+    pub(crate) loc: Loc,
 }
 
+#[derive(Clone)]
 pub struct Tokenizer<Iter: Iterator<Item = char>> {
     iter: Peekable<Iter>,
     col: usize,
@@ -121,10 +122,10 @@ impl<Iter: Iterator<Item = char>> Tokenizer<Iter> {
                     '0'..='9' => {
                         text.push(c);
                         let loc = self.cur_loc();
-                        while let Some(c) = self
-                            .iter
-                            .next_if(|c| c.is_ascii_alphanumeric() || *c == '.')
-                        {
+                        while let Some(c) = self.iter.next_if(|c| {
+                            (!c.is_ascii_alphabetic() || c.to_ascii_lowercase() == 'e')
+                                && (c.is_ascii_alphanumeric() || *c == '.' || *c == '-')
+                        }) {
                             self.col += 1;
                             text.push(c);
                         }
@@ -161,6 +162,19 @@ impl<Iter: Iterator<Item = char>> Tokenizer<Iter> {
                 kind: TokenKind::End,
                 loc: self.cur_loc(),
             },
+        }
+    }
+
+    pub(crate) fn expect_token(&mut self, kind: TokenKind) -> Token {
+        // Should return an error, but for now panics
+        let token = self.next_token();
+        if token.kind == kind {
+            token
+        } else {
+            panic!(
+                "Incorrect token, expected `{:?}`, got `{:?}`",
+                token.kind, kind
+            )
         }
     }
 
