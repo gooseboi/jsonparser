@@ -123,20 +123,11 @@ pub fn parse_ident(
 }
 
 pub fn parse(mut tokenizer: Tokenizer<impl Iterator<Item = char>>) -> JsonVal {
-    let mut vals = HashMap::new();
-
-    while let Some(token) = tokenizer.next() {
-        match token.kind {
-            TokenKind::Ident(_) => {
-                let (ident, val) = parse_ident(token, &mut tokenizer);
-                vals.insert(ident, val);
-            }
-            TokenKind::OpenBracket | TokenKind::ClosedBracket | TokenKind::Comma => {}
-            _ => {
-                unreachable!("Invalid token: {:?}", token)
-            }
+    match tokenizer.next_token().kind {
+        TokenKind::OpenBracket => parse_object(&mut tokenizer),
+        TokenKind::OpenSqBracket => parse_array(&mut tokenizer),
+        token @ _ => {
+            unreachable!("Invalid token: {:?}", token)
         }
     }
-
-    JsonVal::Object(vals)
 }
