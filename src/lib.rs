@@ -9,10 +9,10 @@ mod tests {
     use super::*;
 
     #[allow(unused_macros)]
-    macro_rules! hash_map {
+    macro_rules! map {
         ($({$k:expr,$v:expr}),*) => {{
-            use std::collections::HashMap;
-            let mut map = HashMap::new();
+            use parser::MapType;
+            let mut map = MapType::new();
             $(map.insert($k, $v);)*
             map
         }};
@@ -24,8 +24,8 @@ mod tests {
             JsonVal::Object($map)
         };
         ($({$k:expr,$v:expr}),*) => {{
-            use std::collections::HashMap;
-            let mut map = HashMap::new();
+            use parser::MapType;
+            let mut map = MapType::new();
             $(map.insert($k.to_string(), $v);)*
             json_obj!(map map)
         }};
@@ -66,7 +66,7 @@ mod tests {
         // Example taken from https://wikipedia.org/wiki/JSON
         let input = include_str!("../tests/wikipedia.json");
         let tokenizer = tokenizer::Tokenizer::from_str(&input);
-        let parsed = parser::parse(tokenizer);
+        let parsed = parser::parse(tokenizer).expect("Expected valid json");
         if let JsonVal::Object(ref parsed) = parsed {
             assert_eq!(parsed["firstName"], json_str!("John"));
             assert_eq!(parsed["lastName"], json_str!("Smith"));
@@ -100,7 +100,7 @@ mod tests {
         // Example taken from https://jsonplaceholder.typicode.com/todos/?userId=1
         let input = include_str!("../tests/jsonplaceholder.json");
         let tokenizer = tokenizer::Tokenizer::from_str(&input);
-        let parsed = parser::parse(tokenizer);
+        let parsed = parser::parse(tokenizer).expect("Expected valid json");
         if let JsonVal::Array(ref parsed) = parsed {
             for val in parsed {
                 if let JsonVal::Object(val) = val {
@@ -125,7 +125,7 @@ mod tests {
         // Example taken from https://www.json.org/example.html
         let input = include_str!("../tests/jsonorg.json");
         let tokenizer = tokenizer::Tokenizer::from_str(&input);
-        let parsed = parser::parse(tokenizer);
+        let parsed = parser::parse(tokenizer).expect("Expected valid json");
         if let JsonVal::Object(parsed) = parsed {
             if let JsonVal::Object(ref widget) = parsed["widget"] {
                 assert_eq!(widget["debug"], json_str!("on"));
@@ -161,6 +161,42 @@ mod tests {
                 }
             } else {
                 unreachable!("Must parse as an object, {:#?}", parsed)
+            }
+        } else {
+            unreachable!("Must parse as an object, {:#?}", parsed)
+        }
+    }
+
+    #[test]
+    fn tsoding() {
+        // Example taken from https://github.com/tsoding/haskell-json
+        let input = r#"{
+                "hello": [false,true,null,42,"foo\n\u1234\"", [1,-2,3.1415, 4e-6, 5E6, 0.123e+1]],
+                "world": null
+                }
+            "#;
+        let tokenizer = tokenizer::Tokenizer::from_str(&input);
+        let parsed = parser::parse(tokenizer).expect("Expected valid json");
+        if let JsonVal::Object(ref parsed) = parsed {
+            if let JsonVal::Array(ref hello) = parsed["hello"] {
+                assert_eq!(hello[0], JsonVal::Boolean(false));
+                assert_eq!(hello[1], JsonVal::Boolean(true));
+                assert_eq!(hello[2], JsonVal::Null);
+                assert_eq!(hello[3], json_num!(42; uint));
+                let s = String::from("foo\n\\u1234");
+                println!("{}", s);
+                //assert_eq!(hello[4], json_str!(s));
+                if let JsonVal::Array(ref arr) = hello[5] {
+                    assert_eq!(arr[0], json_num!(1; uint));
+                    assert_eq!(arr[1], json_num!(-2; int));
+                    assert_eq!(arr[2], json_num!(3.1415; float));
+                    assert_eq!(arr[3], json_num!(0.000004; float));
+                    assert_eq!(arr[4], json_num!(5000000f64; float));
+                    assert_eq!(arr[5], json_num!(1.23; float));
+                } else {
+                }
+            } else {
+                unreachable!("Must parse as an array, {:#?}", parsed)
             }
         } else {
             unreachable!("Must parse as an object, {:#?}", parsed)

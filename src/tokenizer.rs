@@ -43,6 +43,25 @@ impl<'a> Tokenizer<Chars<'a>> {
     }
 }
 
+#[derive(Debug)]
+pub(crate) enum ParsingErrorKind {
+    InvalidTrailingComma,
+    MissingEndingComma,
+    UnsupportedToken,
+    UnexpectedToken,
+    InvalidStartingToken,
+    InvalidIdentInArray,
+    InvalidToken,
+}
+
+#[derive(Debug)]
+pub struct ParsingError {
+    pub(crate) kind: ParsingErrorKind,
+    pub(crate) loc: Loc,
+}
+
+type Result = std::result::Result<Token, ParsingError>;
+
 impl<Iter: Iterator<Item = char>> Tokenizer<Iter> {
     pub fn from_iter(iter: Iter) -> Self {
         Self {
@@ -59,123 +78,157 @@ impl<Iter: Iterator<Item = char>> Tokenizer<Iter> {
         }
     }
 
-    pub fn next_token(&mut self) -> Token {
+    fn tokenize_val(&mut self, text: String, loc: Loc) -> Result {
+        use ParsingErrorKind::*;
+        if let Some(',' | '}' | ']') = self.peek() {
+            Ok(Token {
+                kind: TokenKind::Val(text),
+                loc,
+            })
+        } else {
+            Err(ParsingError {
+                kind: MissingEndingComma,
+                loc: self.cur_loc(),
+            })
+        }
+    }
+
+    pub fn next_token(&mut self) -> Result {
         self.skip_whitespace();
         let mut text = String::new();
 
+        use ParsingErrorKind::*;
         match self.iter.next() {
             Some(c) => {
                 self.col += 1;
                 match c {
-                    '{' => Token {
+                    '{' => Ok(Token {
                         kind: TokenKind::OpenBracket,
                         loc: self.cur_loc(),
-                    },
-                    '}' => Token {
+                    }),
+                    '}' => Ok(Token {
                         kind: TokenKind::ClosedBracket,
                         loc: self.cur_loc(),
-                    },
-                    '[' => Token {
+                    }),
+                    '[' => Ok(Token {
                         kind: TokenKind::OpenSqBracket,
                         loc: self.cur_loc(),
-                    },
-                    ']' => Token {
+                    }),
+                    ']' => Ok(Token {
                         kind: TokenKind::ClosedSqBracket,
                         loc: self.cur_loc(),
-                    },
-                    ':' => Token {
+                    }),
+                    ':' => Ok(Token {
                         kind: TokenKind::Colon,
                         loc: self.cur_loc(),
-                    },
-                    ',' => Token {
-                        kind: TokenKind::Comma,
-                        loc: self.cur_loc(),
-                    },
+                    }),
+                    ',' => {
+                        let loc = self.cur_loc();
+                        if let Some('}' | ']') = self.peek() {
+                            Err(ParsingError {
+                                kind: InvalidTrailingComma,
+                                loc,
+                            })
+                        } else {
+                            Ok(Token {
+                                kind: TokenKind::Comma,
+                                loc,
+                            })
+                        }
+                    }
                     // Strings, can be Identifiers or Values
                     '"' => {
                         let loc = self.cur_loc();
-                        while let Some(c) = self.iter.next_if(|c| *c != '"') {
+                        let mut was_escape = false;
+                        while let Some(c) = self.iter.next_if(|c| match *c {
+                            '"' => was_escape,
+                            _ => true,
+                        }) {
                             self.col += 1;
+                            was_escape = c == '\\';
                             text.push(c);
                         }
                         if self.iter.next_if(|c| *c == '"').is_some() {
                             self.col += 1;
-                            self.skip_whitespace();
-                            if let Some(':') = self.iter.peek() {
-                                Token {
+                            if let Some(':') = self.peek() {
+                                Ok(Token {
                                     kind: TokenKind::Ident(text),
                                     loc,
-                                }
+                                })
                             } else {
                                 text.insert(0, '"');
                                 text.push('"');
-                                Token {
+                                Ok(Token {
                                     kind: TokenKind::Val(text),
                                     loc,
-                                }
+                                })
                             }
                         } else {
-                            panic!("Missing ending \"")
+                            unreachable!("Text: {text}")
                         }
                     }
                     // Numbers
                     '0'..='9' => {
                         text.push(c);
                         let loc = self.cur_loc();
-                        while let Some(c) = self.iter.next_if(|c| {
-                            (!c.is_ascii_alphabetic() || c.to_ascii_lowercase() == 'e')
-                                && (c.is_ascii_alphanumeric() || *c == '.' || *c == '-')
-                        }) {
+                        while let Some(c) = self.iter.next_if(is_num_char) {
                             self.col += 1;
                             text.push(c);
                         }
-                        Token {
-                            kind: TokenKind::Val(text),
-                            loc,
-                        }
+                        self.tokenize_val(text, loc)
                     }
                     // Cases like `null` or `true`
                     c => {
                         text.push(c);
                         if c.is_ascii() {
                             let loc = self.cur_loc();
-                            while let Some(c) = self.iter.next_if(|c| *c != ',' && *c != '\n') {
+                            while let Some(c) =
+                                self.next_if(|c| *c != ',' && *c != '}' && *c != ']')
+                            {
                                 self.col += 1;
                                 text.push(c);
                             }
-                            if let Some(_) = self.iter.next_if(|c| *c == ',' || *c == '\n') {
-                                self.col += 1;
-                                Token {
-                                    kind: TokenKind::Val(text.clone()),
-                                    loc,
-                                }
-                            } else {
-                                panic!("Missing ending token={}", text)
-                            }
+                            self.tokenize_val(text, loc)
                         } else {
-                            panic!("Unsupported token, {}", c)
+                            Err(ParsingError {
+                                kind: UnsupportedToken,
+                                loc: self.cur_loc(),
+                            })
                         }
                     }
                 }
             }
-            None => Token {
+            None => Ok(Token {
                 kind: TokenKind::End,
                 loc: self.cur_loc(),
-            },
+            }),
         }
     }
 
-    pub(crate) fn expect_token(&mut self, kind: TokenKind) -> Token {
-        // Should return an error, but for now panics
-        let token = self.next_token();
-        if token.kind == kind {
-            token
-        } else {
-            panic!(
-                "Incorrect token, expected `{:?}`, got `{:?}`",
-                token.kind, kind
-            )
+    pub(crate) fn expect_token(&mut self, kind: TokenKind) -> Result {
+        match self.next_token() {
+            Ok(token) => {
+                if token.kind == kind {
+                    Ok(token)
+                } else {
+                    Err(ParsingError {
+                        kind: ParsingErrorKind::UnexpectedToken,
+                        loc: token.loc,
+                    })
+                }
+            }
+            err @ Err(_) => err,
         }
+    }
+
+    fn peek(&mut self) -> Option<&char> {
+        self.skip_whitespace();
+        self.iter.peek()
+    }
+
+    fn next_if(&mut self, pred: impl FnOnce(&char) -> bool) -> Option<char> {
+        self.skip_whitespace();
+        self.iter.next_if(pred)
     }
 
     fn skip_whitespace(&mut self) {
@@ -199,15 +252,7 @@ impl<Iter: Iterator<Item = char>> Tokenizer<Iter> {
     }
 }
 
-impl<Iter: Iterator<Item = char>> Iterator for Tokenizer<Iter> {
-    type Item = Token;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let token = self.next_token();
-        if token.kind == TokenKind::End {
-            None
-        } else {
-            Some(token)
-        }
-    }
+pub(crate) fn is_num_char(c: &char) -> bool {
+    (!c.is_alphabetic() || c.to_lowercase().next().unwrap() == 'e')
+        && (c.is_ascii_alphanumeric() || *c == '.' || *c == '-' || *c == '+')
 }
